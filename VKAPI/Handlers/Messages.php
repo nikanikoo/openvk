@@ -62,6 +62,7 @@ final class Messages extends VKAPIRequestHandler
                 $rMsg->body = ovk_proc_strtr($rMsg->body, $preview_length);
             }
             $rMsg->text = ovk_proc_strtr($rMsg->text, $preview_length);
+            $rMsg->attachments = $this->getApiAttachments($message);
 
             $items[] = $rMsg;
         }
@@ -139,15 +140,15 @@ final class Messages extends VKAPIRequestHandler
         if (!$msg) {
             $this->fail(950, "Internal error");
         } elseif (!empty($attachment)) {
-            $attachs = parseAttachments($attachment);
+            $attachs = parseAttachments($attachment, ['photo', 'video', 'note', 'poll', 'audio', 'doc']);
 
-            # Работают только фотки, остальное просто не будет отображаться.
             if (sizeof($attachs) >= 10) {
                 $this->fail(15, "Too many attachments");
             }
 
             foreach ($attachs as $attach) {
-                if ($attach && !$attach->isDeleted() && $attach->getOwner()->getId() == $this->getUser()->getId()) {
+                if ($attach && !$attach->isDeleted() && $attach->canBeViewedBy($this->getUser()) &&
+                !(method_exists($attach, 'getVoters') && $attach->getOwner()->getId() != $this->getUser()->getId())) {
                     $msg->attach($attach);
                 } else {
                     $this->fail(52, "One of the attachments is invalid");
@@ -246,6 +247,7 @@ final class Messages extends VKAPIRequestHandler
                 $lastMessagePreview->body       = $lastMessage->getText(false);
                 $lastMessagePreview->text       = $lastMessage->getText(false);
                 $lastMessagePreview->emoji      = true;
+                $lastMessagePreview->attachments = $this->getApiAttachments($lastMessage);
 
                 if ($extended == 1) {
                     $users[] = $author;
@@ -368,6 +370,7 @@ final class Messages extends VKAPIRequestHandler
             $rMsg->body       = $message->getText(false);
             $rMsg->text       = $message->getText(false);
             $rMsg->emoji      = true;
+            $rMsg->attachments = $this->getApiAttachments($message);
 
             $results[] = $rMsg;
         }
@@ -471,7 +474,7 @@ final class Messages extends VKAPIRequestHandler
         $msg->save(true);
 
         if (!empty($attachment)) {
-            $attachs = parseAttachments($attachment);
+            $attachs = parseAttachments($attachment, ['photo', 'video', 'note', 'poll', 'audio', 'doc']);
             $newAttachmentsCount = sizeof($attachs);
 
             $postsAttachments = iterator_to_array($msg->getChildren());
@@ -485,7 +488,8 @@ final class Messages extends VKAPIRequestHandler
             }
 
             foreach ($attachs as $attach) {
-                if ($attach && !$attach->isDeleted() && $attach->getOwner()->getId() == $this->getUser()->getId()) {
+                if ($attach && !$attach->isDeleted() && $attach->canBeViewedBy($this->getUser()) &&
+                !(method_exists($attach, 'getVoters') && $attach->getOwner()->getId() != $this->getUser()->getId())) {
                     $msg->attach($attach);
                 } else {
                     $this->fail(52, "One of the attachments is invalid");
@@ -494,5 +498,101 @@ final class Messages extends VKAPIRequestHandler
         }
 
         return 1;
+    }
+
+    private function getApiAttachments(Message $message): array
+    {
+        $attachments = [];
+        foreach ($message->getChildren() as $attachment) {
+            if ($attachment instanceof \openvk\Web\Models\Entities\Photo) {
+                if ($attachment->isDeleted()) {
+                    continue;
+                }
+
+                $attachments[] = $this->getApiPhoto($attachment);
+            } elseif ($attachment instanceof \openvk\Web\Models\Entities\Poll) {
+                $attachments[] = $this->getApiPoll($attachment, $this->getUser());
+            } elseif ($attachment instanceof \openvk\Web\Models\Entities\Video) {
+                $attachments[] = $attachment->getApiStructure($this->getUser());
+            } elseif ($attachment instanceof \openvk\Web\Models\Entities\Note) {
+                if (VKAPI_DECL_VER === '4.100') {
+                    $attachments[] = $attachment->toVkApiStruct();
+                } else {
+                    $attachments[] = [
+                        'type' => 'note',
+                        'note' => $attachment->toVkApiStruct(),
+                    ];
+                }
+            } elseif ($attachment instanceof \openvk\Web\Models\Entities\Audio) {
+                $attachments[] = [
+                    "type" => "audio",
+                    "audio" => $attachment->toVkApiStruct($this->getUser()),
+                ];
+            } elseif ($attachment instanceof \openvk\Web\Models\Entities\Document) {
+                $attachments[] = [
+                    "type" => "doc",
+                    "doc" => $attachment->toVkApiStruct($this->getUser()),
+                ];
+            }
+        }
+        return $attachments;
+    }
+
+    private function getApiPhoto($attachment)
+    {
+        return [
+            "type"  => "photo",
+            "photo" => [
+                "album_id" => $attachment->getAlbum() ? $attachment->getAlbum()->getId() : 0,
+                "date"     => $attachment->getPublicationTime()->timestamp(),
+                "id"       => $attachment->getVirtualId(),
+                "owner_id" => $attachment->getOwner()->getId(),
+                "sizes"    => !is_null($attachment->getVkApiSizes()) ? array_values($attachment->getVkApiSizes()) : null,
+                "text"     => "",
+                "has_tags" => false,
+            ],
+        ];
+    }
+
+    private function getApiPoll($attachment, $user)
+    {
+        $answers = [];
+        foreach ($attachment->getResults()->options as $answer) {
+            $answers[] = (object) [
+                "id"    => $answer->id,
+                "rate"  => $answer->pct,
+                "text"  => $answer->name,
+                "votes" => $answer->votes,
+            ];
+        }
+
+        $userVote = [];
+        foreach ($attachment->getUserVote($user) as $vote) {
+            $userVote[] = $vote[0];
+        }
+
+        return [
+            "type"  => "poll",
+            "poll" => [
+                "multiple"       => $attachment->isMultipleChoice(),
+                "end_date"       => $attachment->endsAt() == null ? 0 : $attachment->endsAt()->timestamp(),
+                "closed"         => $attachment->hasEnded(),
+                "is_board"       => false,
+                "can_edit"       => false,
+                "can_vote"       => $attachment->canVote($user),
+                "can_report"     => false,
+                "can_share"      => true,
+                "created"        => 0,
+                "id"             => $attachment->getId(),
+                "owner_id"       => $attachment->getOwner()->getId(),
+                "question"       => $attachment->getTitle(),
+                "votes"          => $attachment->getVoterCount(),
+                "disable_unvote" => $attachment->isRevotable(),
+                "anonymous"      => $attachment->isAnonymous(),
+                "answer_ids"     => $userVote,
+                "answers"        => $answers,
+                "author_id"      => $attachment->getOwner()->getId(),
+            ],
+        ];
     }
 }
