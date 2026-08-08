@@ -56,4 +56,27 @@ You can use OpenVK models for that. However, **do not** return them
 to create a response object and return it. It is also a good idea to
 define a structure in Structures subdirectory.
 
+## The `execute` method (VKScript)
+
+OpenVK provides full support for the VK API `execute` method and VKScript language interpreter.
+
+* **Endpoint:** `/method/execute` or `/method/execute.<procedure>`
+* **Parameter:** `code` (string) — the VKScript code to execute.
+* **Returns:** `{"response": ...}` and optional `{"execute_errors": [...]}`.
+
+### VKScript Features:
+- **Variables & Arguments:** `var x = 1;` and access to query parameters via `Args.paramName`.
+- **API calls:** `API.users.get({user_ids: 1})` or `API.wall.get(...)` (up to 25 calls per script).
+- **Operators:** Arithmetic (`+`, `-`, `*`, `/`, `%`), bitwise (`&`, `|`, `^`, `~`, `<<`, `>>`, `>>>`), comparisons (`==`, `!=`, `===`, `!==`, `<`, `>`, `<=`, `>=`), compound assignments (`+=`, `-=`, `*=`, `/=`, etc.), increment/decrement (`++`, `--`), ternary (`cond ? a : b`), `typeof`, `delete`.
+- **Array projection:** `items@.id` or `items@[field]`.
+- **Control flow:** `if/else`, `while`, `do..while`, `for (var i = 0; i < n; i++)`, `break`, `continue`, `return`.
+- **Built-in Objects & Methods:**
+  - `Math` (`min`, `max`, `floor`, `ceil`, `round`, `abs`, `trunc`, `pow`, `sqrt`, `random`, `sin`, `cos`, `tan`, `atan2`, `log`, `exp`, `PI`, `E`)
+  - `JSON` (`parse`, `stringify`)
+  - `Object` (`keys`, `values`, `entries`, `assign`)
+  - `Array` (`isArray`, `push`, `pop`, `shift`, `unshift`, `slice`, `splice`, `indexOf`, `lastIndexOf`, `reverse`, `join`, `concat`, `includes`)
+  - `String` (`substr`, `substring`, `slice`, `split`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `toLowerCase`, `toUpperCase`, `trim`, `charAt`, `charCodeAt`, `replace`, `repeat`, `padStart`, `padEnd`)
+  - Global helpers: `parseInt`, `parseFloat`, `isNaN`, `isFinite`, `encodeURIComponent`, `decodeURIComponent`, `escape`, `unescape`, `String`, `Number`, `Boolean`.
+
 Have a lot of fun <sup></sup>
+

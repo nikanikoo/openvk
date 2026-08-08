@@ -421,6 +421,11 @@ final class VKAPIPresenter extends OpenVKPresenter
 
     public function renderRoute(string $object, string $method): void
     {
+        if (strtolower($object) === "execute") {
+            $this->renderExecute($method);
+            return;
+        }
+
         $callback = $this->queryParam("callback");
         [$identity, $platform] = $this->resolveIdentity($object, $method);
 
@@ -459,14 +464,22 @@ final class VKAPIPresenter extends OpenVKPresenter
         exit($result);
     }
 
-    public function renderExecute(): void
+    public function renderExecute(?string $procedure = null): void
     {
         $callback = $this->queryParam("callback");
-        [$identity, $platform] = $this->resolveIdentity("execute", "");
+        [$identity, $platform] = $this->resolveIdentity("execute", $procedure ?? "");
 
         $code = $this->requestParam("code");
+        if (is_null($code) && !empty($procedure)) {
+            // Load VKScript procedure .vks
+            $procPath = dirname(__DIR__, 2) . '/VKAPI/Procedures/' . $procedure . '.vks';
+            if (file_exists($procPath)) {
+                $code = file_get_contents($procPath);
+            }
+        }
+
         if (is_null($code)) {
-            $this->fail(100, "Required parameter 'code' missing.", "execute", "");
+            $this->fail(100, "Required parameter 'code' missing.", "execute", $procedure ?? "");
         }
 
         // Everything except the reserved keys is exposed to the script via Args.
@@ -492,7 +505,7 @@ final class VKAPIPresenter extends OpenVKPresenter
             $res    = $interpreter->run($ast);
             $errors = $interpreter->getExecuteErrors();
         } catch (APIErrorException $ex) {
-            $this->fail($ex->getCode(), $ex->getMessage(), "execute", "");
+            $this->fail($ex->getCode(), $ex->getMessage(), "execute", $procedure ?? "");
         }
 
         $payload = ["response" => $res];
