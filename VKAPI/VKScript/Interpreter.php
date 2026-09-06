@@ -1275,4 +1275,3 @@ class Interpreter
         return $value;
     }
 }
-
