@@ -33,7 +33,7 @@ class Interpreter
     private const MAX_API_CALLS = 25;
     private const MAX_OPERATIONS = 5000000;
 
-    private const MUTATING_METHODS = ["push", "pop", "shift", "unshift", "splice", "reverse"];
+    private const MUTATING_METHODS = ["push", "pop", "shift", "unshift", "splice", "reverse", "sort"];
 
     /** @var callable fn(string $object, string $method, array $params): mixed */
     private $apiCallback;
@@ -158,6 +158,32 @@ class Interpreter
                 }
                 return;
 
+            case "for_in":
+                $target = $this->eval($node["object"]);
+                $keys   = [];
+                if (is_object($target)) {
+                    $keys = array_keys(get_object_vars($target));
+                } elseif (is_array($target)) {
+                    $keys = array_keys($target);
+                }
+
+                $varName = $node["var"];
+                if ($node["is_var"] && !array_key_exists($varName, $this->vars)) {
+                    $this->vars[$varName] = null;
+                }
+
+                foreach ($keys as $k) {
+                    $this->vars[$varName] = (string) $k;
+                    try {
+                        $this->exec($node["body"]);
+                    } catch (BreakSignal) {
+                        break;
+                    } catch (ContinueSignal) {
+                        continue;
+                    }
+                }
+                return;
+
             case "break":
                 throw new BreakSignal();
 
@@ -187,6 +213,15 @@ class Interpreter
 
             case "name":
                 if (!array_key_exists($node["name"], $this->vars)) {
+                    if ($node["name"] === "undefined") {
+                        return null;
+                    }
+                    if ($node["name"] === "NaN") {
+                        return NAN;
+                    }
+                    if ($node["name"] === "Infinity") {
+                        return INF;
+                    }
                     if ($node["name"] === "Math" || $node["name"] === "JSON" || $node["name"] === "Object" || $node["name"] === "Array") {
                         return (object) ["__builtin" => $node["name"]];
                     }
@@ -202,9 +237,9 @@ class Interpreter
                 return $out;
 
             case "object":
-                $out = [];
+                $out = new \stdClass();
                 foreach ($node["props"] as $prop) {
-                    $out[$prop["key"]] = $this->eval($prop["value"]);
+                    $out->{$prop["key"]} = $this->eval($prop["value"]);
                 }
                 return $out;
 
@@ -350,7 +385,7 @@ class Interpreter
                     return true;
                 }
             } elseif (is_object($parent)) {
-                if (isset($parent->{$key})) {
+                if (property_exists($parent, (string) $key) || isset($parent->{$key})) {
                     unset($parent->{$key});
                     return true;
                 }
@@ -376,6 +411,7 @@ class Interpreter
                     return $this->toString($left) . $this->toString($right);
                 }
                 if (is_array($left) || is_object($left) || is_array($right) || is_object($right)) {
+
                     // list + list => concatenation; object + object => shallow merge (VK semantics).
                     if (is_array($left) && array_is_list($left) && is_array($right) && array_is_list($right)) {
                         return array_merge($left, $right);
@@ -384,7 +420,7 @@ class Interpreter
                     foreach ($this->toAssoc($right) as $k => $v) {
                         $out[$k] = $v;
                     }
-                    return $out;
+                    return (object) $out;
                 }
                 return $this->toNumber($left) + $this->toNumber($right);
             case "-":
@@ -431,6 +467,15 @@ class Interpreter
                 return $this->compare($left, $right) <= 0;
             case ">=":
                 return $this->compare($left, $right) >= 0;
+            case "in":
+                $prop = $this->toString($left);
+                if (is_object($right)) {
+                    return property_exists($right, $prop) || isset($right->{$prop});
+                }
+                if (is_array($right)) {
+                    return array_key_exists($prop, $right) || array_key_exists((int) $prop, $right);
+                }
+                return false;
         }
 
         throw new APIErrorException("Runtime error: unknown operator '$op'", 13);
@@ -644,10 +689,10 @@ class Interpreter
         switch ($method) {
             case "parse":
                 $str = $this->toString($args[0] ?? "");
-                $res = json_decode($str, true);
+                $res = json_decode($str, false);
                 return $res === null && strtolower(trim($str)) !== "null" ? null : $res;
             case "stringify":
-                return json_encode($args[0] ?? null);
+                return json_encode($this->export($args[0] ?? null));
         }
 
         throw new APIErrorException("Runtime error: unknown JSON method '$method'", 13);
@@ -804,6 +849,21 @@ class Interpreter
                     }
                 }
                 return -1;
+            case "sort":
+                $allNumeric = true;
+                foreach ($receiver as $item) {
+                    if (!is_int($item) && !is_float($item) && (!is_string($item) || !is_numeric($item))) {
+                        $allNumeric = false;
+                        break;
+                    }
+                }
+                usort($receiver, function ($a, $b) use ($allNumeric) {
+                    if ($allNumeric) {
+                        return $this->toNumber($a) <=> $this->toNumber($b);
+                    }
+                    return strcmp($this->toString($a), $this->toString($b));
+                });
+                return $receiver;
         }
 
         throw new APIErrorException("Runtime error: unknown array method '$method'", 13);
@@ -850,8 +910,15 @@ class Interpreter
                 return $pos === false ? -1 : $pos;
             case "lastIndexOf":
                 $search = $this->toString($args[0] ?? "");
-                $from   = isset($args[1]) ? (int) $args[1] : 0;
-                $pos    = mb_strrpos($receiver, $search, $from);
+                $len    = mb_strlen($receiver);
+                $from   = isset($args[1]) ? (int) $args[1] : $len;
+                if ($from < 0) {
+                    $from = 0;
+                } elseif ($from >= $len) {
+                    $from = $len;
+                }
+                $sub = mb_substr($receiver, 0, $from + mb_strlen($search));
+                $pos = mb_strrpos($sub, $search);
                 return $pos === false ? -1 : $pos;
             case "includes":
                 $search = $this->toString($args[0] ?? "");
@@ -961,7 +1028,10 @@ class Interpreter
         }
         if (is_string($obj)) {
             $i = (int) $index;
-            return mb_substr($obj, $i, 1) ?: null;
+            if ($i < 0 || $i >= mb_strlen($obj)) {
+                return null;
+            }
+            return mb_substr($obj, $i, 1);
         }
 
         return null;
@@ -1098,7 +1168,7 @@ class Interpreter
         if (is_float($index) || is_bool($index)) {
             return (int) $index;
         }
-        if (is_string($index) && preg_match('/^-?\d+$/', $index)) {
+        if (is_string($index) && preg_match('/^-?(0|[1-9]\d*)$/', $index)) {
             return (int) $index;
         }
         return (string) $index;
@@ -1176,9 +1246,21 @@ class Interpreter
         return $this->toNumber($a) <=> $this->toNumber($b);
     }
 
-    /** Normalise associative arrays produced by object literals into stdClass for JSON output. */
+    /** Normalise objects and associative arrays into stdClass for JSON output. */
     private function export($value)
     {
+        if (is_float($value) && (is_nan($value) || is_infinite($value))) {
+            return null;
+        }
+
+        if (is_object($value)) {
+            $obj = new \stdClass();
+            foreach (get_object_vars($value) as $k => $v) {
+                $obj->{$k} = $this->export($v);
+            }
+            return $obj;
+        }
+
         if (is_array($value)) {
             if (array_is_list($value)) {
                 return array_map([$this, "export"], $value);

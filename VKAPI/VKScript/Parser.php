@@ -219,6 +219,46 @@ class Parser
         $this->expect("keyword", "for");
         $this->expect("punc", "(");
 
+        if ($this->check("keyword", "var")) {
+            $savedPos = $this->pos;
+            $this->advance();
+            if ($this->check("name")) {
+                $varName = $this->advance()["value"];
+                if ($this->check("keyword", "in")) {
+                    $this->advance();
+                    $obj = $this->parseExpression();
+                    $this->expect("punc", ")");
+                    $body = $this->parseStatement();
+                    return [
+                        "kind"   => "for_in",
+                        "is_var" => true,
+                        "var"    => $varName,
+                        "object" => $obj,
+                        "body"   => $body,
+                    ];
+                }
+            }
+            $this->pos = $savedPos;
+        } elseif ($this->check("name")) {
+
+            $savedPos = $this->pos;
+            $varName  = $this->advance()["value"];
+            if ($this->check("keyword", "in")) {
+                $this->advance();
+                $obj = $this->parseExpression();
+                $this->expect("punc", ")");
+                $body = $this->parseStatement();
+                return [
+                    "kind"   => "for_in",
+                    "is_var" => false,
+                    "var"    => $varName,
+                    "object" => $obj,
+                    "body"   => $body,
+                ];
+            }
+            $this->pos = $savedPos;
+        }
+
         $init = null;
         if (!$this->check("punc", ";")) {
             if ($this->check("keyword", "var")) {
@@ -244,7 +284,11 @@ class Parser
     {
         $this->expect("keyword", "return");
         $value = null;
-        if (!$this->check("punc", ";") && !$this->check("punc", "}") && !$this->isEof()) {
+        $statementStarters = ["var", "if", "while", "do", "for", "break", "continue", "return"];
+        $tok = $this->peek();
+        $isStatementStarter = ($tok["type"] === "keyword" && in_array($tok["value"], $statementStarters, true));
+
+        if (!$this->check("punc", ";") && !$this->check("punc", "}") && !$this->isEof() && !$isStatementStarter) {
             $value = $this->parseExpression();
         }
         $this->acceptSemicolons();
@@ -374,7 +418,13 @@ class Parser
     private function parseRelational(): array
     {
         $left = $this->parseShift();
-        while ($this->check("op", "<") || $this->check("op", ">") || $this->check("op", "<=") || $this->check("op", ">=")) {
+        while (
+            $this->check("op", "<")
+            || $this->check("op", ">")
+            || $this->check("op", "<=")
+            || $this->check("op", ">=")
+            || $this->check("keyword", "in")
+        ) {
             $op    = $this->advance()["value"];
             $right = $this->parseShift();
             $left  = ["kind" => "binary", "op" => $op, "left" => $left, "right" => $right];
