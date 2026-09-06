@@ -58,25 +58,95 @@ define a structure in Structures subdirectory.
 
 ## The `execute` method (VKScript)
 
-OpenVK provides full support for the VK API `execute` method and VKScript language interpreter.
+OpenVK provides full support for the VK API `execute` method and an isolated VKScript language interpreter.
 
-* **Endpoint:** `/method/execute` or `/method/execute.<procedure>`
-* **Parameter:** `code` (string) — the VKScript code to execute.
-* **Returns:** `{"response": ...}` and optional `{"execute_errors": [...]}`.
+### How to Call `execute`
 
-### VKScript Features:
-- **Variables & Arguments:** `var x = 1;` and access to query parameters via `Args.paramName`.
-- **API calls:** `API.users.get({user_ids: 1})` or `API.wall.get(...)` (up to 25 calls per script).
-- **Operators:** Arithmetic (`+`, `-`, `*`, `/`, `%`), bitwise (`&`, `|`, `^`, `~`, `<<`, `>>`, `>>>`), comparisons (`==`, `!=`, `===`, `!==`, `<`, `>`, `<=`, `>=`), compound assignments (`+=`, `-=`, `*=`, `/=`, etc.), increment/decrement (`++`, `--`), ternary (`cond ? a : b`), `typeof`, `delete`.
-- **Array projection:** `items@.id` or `items@[field]`.
-- **Control flow:** `if/else`, `while`, `do..while`, `for (var i = 0; i < n; i++)`, `break`, `continue`, `return`.
-- **Built-in Objects & Methods:**
-  - `Math` (`min`, `max`, `floor`, `ceil`, `round`, `abs`, `trunc`, `pow`, `sqrt`, `random`, `sin`, `cos`, `tan`, `atan2`, `log`, `exp`, `PI`, `E`)
-  - `JSON` (`parse`, `stringify`)
-  - `Object` (`keys`, `values`, `entries`, `assign`)
-  - `Array` (`isArray`, `push`, `pop`, `shift`, `unshift`, `slice`, `splice`, `indexOf`, `lastIndexOf`, `reverse`, `join`, `concat`, `includes`)
-  - `String` (`substr`, `substring`, `slice`, `split`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `toLowerCase`, `toUpperCase`, `trim`, `charAt`, `charCodeAt`, `replace`, `repeat`, `padStart`, `padEnd`)
-  - Global helpers: `parseInt`, `parseFloat`, `isNaN`, `isFinite`, `encodeURIComponent`, `decodeURIComponent`, `escape`, `unescape`, `String`, `Number`, `Boolean`.
+Send a request to `/method/execute` passing your VKScript in the `code` parameter:
+```http
+POST /method/execute HTTP/1.1
+Host: openvk.local
+Authorization: Bearer <access_token>
+Content-Type: application/x-www-form-urlencoded
+
+v=5.131&code=var u = API.users.get(); return {"user": u[0], "time": API.utils.getServerTime()};
+```
+
+You can also send requests with `Content-Type: application/json`:
+```json
+POST /method/execute
+{
+    "code": "return API.users.get();",
+    "v": "5.131"
+}
+```
+
+### Script Arguments (`Args`)
+
+Any additional query parameter or JSON body property passed to `/method/execute` (except reserved system keys like `code`, `access_token`, `v`, `callback`, `auth_mechanism`, `requestPort`) is accessible inside the script via the global `Args` object:
+
+```javascript
+// Example request with custom parameters: code=...&user_id=1&count=10
+var userId = Args.user_id;
+var count = Args.count;
+
+var wall = API.wall.get({"owner_id": userId, "count": count});
+return wall;
+```
+
+---
+
+### VKScript Language Reference
+
+VKScript is a safe, sandboxed subset of ECMAScript / ActionScript executed entirely in PHP memory.
+
+#### 1. Calling API Methods
+Call any available VK API method via the global `API` object:
+```javascript
+var profile = API.users.get({"fields": "photo_max,counters"});
+var wall = API.wall.get({"count": 5});
+```
+- **Error resilience:** If an API method fails (e.g. private profile), it evaluates to `false` without crashing the script. The error is recorded into the `execute_errors` response array.
+
+#### 2. Projection Operator (`@`)
+Extract properties or array elements in bulk (like the E4X / Groovy spread operator):
+```javascript
+var friends = API.friends.get({"fields": "first_name,last_name"});
+var names = friends.items@.first_name;      // Array of first names
+var photoUrls = friends.items@["photo_50"]; // Dynamic property lookup
+```
+
+#### 3. Array and Object Merging (`+`)
+The `+` operator supports VK-specific list concatenation and shallow object merging:
+```javascript
+var list = [1, 2] + [3, 4];            // [1, 2, 3, 4]
+var merged = {"a": 1} + {"b": 2};      // {"a": 1, "b": 2}
+```
+
+#### 4. Control Structures & Syntax
+- **Variables:** `var a = 1, b = "hello";` (function/global script scope).
+- **Conditionals:** `if (cond) { ... } else if (other) { ... } else { ... }`, ternary operator `cond ? a : b`.
+- **Loops:** `for (var i = 0; i < 10; i++)`, `for (var key in obj)`, `while (cond)`, `do { ... } while (cond)`.
+- **Jumps:** `break`, `continue`, `return <expr>;`.
+- **Operators:**
+  - Arithmetic: `+`, `-`, `*`, `/`, `%`
+  - Bitwise: `&`, `|`, `^`, `~`, `<<`, `>>`, `>>>`
+  - Assignment: `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`, `>>>=`
+  - Increment / Decrement: `++a`, `a++`, `--a`, `a--`
+  - Comparison: `==`, `!=`, `===`, `!==`, `<`, `>`, `<=`, `>=`
+  - Operators: `typeof`, `delete obj.prop`, `prop in obj`
+
+#### 5. Built-in Objects & Methods
+- **`Math`:** `min`, `max`, `floor`, `ceil`, `round`, `abs`, `trunc`, `pow`, `sqrt`, `random`, `sin`, `cos`, `tan`, `atan2`, `log`, `exp`, `PI`, `E`.
+- **`JSON`:** `JSON.parse(str)`, `JSON.stringify(val)`.
+- **`Array`:** `push`, `pop`, `shift`, `unshift`, `slice`, `splice`, `indexOf`, `lastIndexOf`, `reverse`, `join`, `concat`, `includes`, `sort`.
+- **`String`:** `split`, `slice`, `substr`, `substring`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `toLowerCase`, `toUpperCase`, `trim`, `charAt`, `charCodeAt`, `replace`, `repeat`, `padStart`, `padEnd`.
+- **Global Functions:** `parseInt`, `parseFloat`, `isNaN`, `isFinite`, `encodeURIComponent`, `decodeURIComponent`, `escape`, `unescape`, `String()`, `Number()`, `Boolean()`.
+
+#### 6. Execution Limits & Safety
+To protect the server against denial-of-service and infinite loops:
+- **`MAX_API_CALLS`:** Maximum **25** API calls per script.
+- **`MAX_OPERATIONS`:** Maximum **5,000,000** operations per execution.
 
 Have a lot of fun <sup></sup>
 
