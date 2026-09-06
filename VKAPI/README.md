@@ -148,5 +148,53 @@ To protect the server against denial-of-service and infinite loops:
 - **`MAX_API_CALLS`:** Maximum **25** API calls per script.
 - **`MAX_OPERATIONS`:** Maximum **5,000,000** operations per execution.
 
+---
+
+### Stored Procedures (Client-specific scripts)
+
+Official VK mobile applications (VK for Android, iPhone, Windows Phone) and third-party clients (Kate Mobile, VK4ME, etc.) frequently rely on pre-written stored procedures invoked via `/method/execute.<procedure_name>` or `/method/execute?procedure=<procedure_name>`.
+
+#### 1. File Structure and Locations
+Stored procedures are standard `.vks` files (VKScript) located under `VKAPI/Procedures/`:
+- **Client-specific procedures:** `VKAPI/Procedures/{client_id}/{procedure}.vks`
+  - Example: `VKAPI/Procedures/2274003/getFullProfileNewWithGifts.vks` for official VK Android (`client_id = 2274003`).
+- **Versioned procedures:** `VKAPI/Procedures/{client_id}/{procedure}.v{func_v}.vks`
+  - If the client passes a `func_v` parameter (e.g. `func_v=2`), OpenVK checks for `{procedure}.v2.vks` first before falling back to `{procedure}.vks`.
+- **Global fallback procedures:** `VKAPI/Procedures/{procedure}.vks`
+  - Procedures in the root of `VKAPI/Procedures/` are available to any client as a fallback if no client-specific override exists.
+
+#### 2. How OpenVK Resolves Client Procedures
+When a request arrives at `/method/execute.<procedure>` or `/method/execute?procedure=<name>`:
+1. **Default resolution via Token:** OpenVK identifies the client platform and application ID from the user's `access_token` (`token.client_id` or `token.platform`).
+2. **Explicit Override:** A client can explicitly target procedures of another client by passing `client_id` or `client_name`:
+   - `client_id=2274003` (numeric App ID from `data/clients.xml` or custom app).
+   - `client_name=vk_android` (matches tags or platform families like `vk_android`, `vk_iphone`, `kate_mobile`, etc.).
+   *These parameters can be supplied via query strings, `x-www-form-urlencoded` POST bodies, or JSON payloads.*
+
+#### 3. Calling Procedures Across Clients
+- **Direct HTTP Request:**
+  ```http
+  POST /method/execute.getFullProfileNewWithGifts HTTP/1.1
+  Host: openvk.local
+  Content-Type: application/x-www-form-urlencoded
+
+  access_token=<token_from_any_client>&client_id=2274003&id=1&v=5.131
+  ```
+- **Nested invocation inside another VKScript:**
+  ```javascript
+  var res = API.execute.getFullProfileNewWithGifts({
+      "client_id": 2274003,
+      "id": Args.user_id
+  });
+  return res;
+  ```
+
+#### 4. Handling Unauthenticated / Guest Requests
+- Stored procedures can be invoked without an `access_token` if `client_id` or `client_name` is provided (or if the procedure is global).
+- The procedure runs in guest mode with `$identity = null`.
+- Public methods and stubs return valid data normally.
+- Any internal method requiring authentication (e.g., `account.getCounters`, `messages.*`) evaluates to `false` without crashing the procedure, and appends an error (`error_code: 5`, `"User authorization failed: no access_token passed."`) to the `execute_errors` array. The procedure continues executing and safely returns fallback values.
+
 Have a lot of fun <sup></sup>
+
 
